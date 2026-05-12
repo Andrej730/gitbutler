@@ -116,8 +116,8 @@ pub use ext::ObjectStorageExt;
 
 mod repo_ext;
 pub use repo_ext::{
-    PlannedCommitChange, RepositoryExt, plan_commit_changes_for_merge_for_tests,
-    update_head_reference,
+    MergeCommitChangesConflict, MergeCommitChangesOutcome, PlannedCommitChange, RepositoryExt,
+    plan_commit_changes_for_merge_for_tests, update_head_reference,
 };
 
 /// The legacy single-workspace reference used by GitButler.

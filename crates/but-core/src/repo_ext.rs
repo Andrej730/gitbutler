@@ -13,6 +13,48 @@ use std::path::PathBuf;
 
 use crate::{GitConfigSettings, commit::TreeKind};
 
+/// A selected commit change range that should be merged into an accumulated
+/// tree.
+///
+/// `base_tree_id` is the tree from which `commit_id`'s contribution should be
+/// measured. Merging `base_tree_id..commit_id^{tree}` applies only that
+/// commit's selected change range, not all tree state reachable through its
+/// parents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlannedCommitChange {
+    /// The selected commit whose change range should be merged.
+    pub commit_id: gix::ObjectId,
+    /// The tree that acts as the base for `commit_id`'s contribution.
+    pub base_tree_id: gix::ObjectId,
+}
+
+/// The result of merging selected commit changes into one tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeCommitChangesOutcome {
+    /// The resulting tree.
+    ///
+    /// If [`Self::conflict`] is `Some`, this is the auto-resolved tree that
+    /// should be presented as the conflicted commit's visible tree.
+    pub tree_id: gix::ObjectId,
+    /// Details about the last unresolved merge encountered while producing
+    /// [`Self::tree_id`].
+    pub conflict: Option<MergeCommitChangesConflict>,
+}
+
+/// Conflict metadata needed to persist a GitButler conflicted commit from a
+/// merged change-range result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeCommitChangesConflict {
+    /// The merge base tree for the conflicted merge step.
+    pub base_tree_id: gix::ObjectId,
+    /// The accumulated tree on the "ours" side of the conflicted merge step.
+    pub ours_tree_id: gix::ObjectId,
+    /// The selected commit tree on the "theirs" side of the conflicted merge step.
+    pub theirs_tree_id: gix::ObjectId,
+    /// The paths that remained conflicted after auto-resolution.
+    pub conflict_entries: crate::commit::ConflictEntries,
+}
+
 /// Update `HEAD` to `new_target` and write a reflog entry composed from `operation`, `message`,
 /// and `num_parents`.
 ///
@@ -100,6 +142,52 @@ pub trait RepositoryExt: Sized {
         to_rebase_commit_id: gix::ObjectId,
         merge_options: gix::merge::tree::Options,
     ) -> anyhow::Result<gix::merge::tree::Outcome<'_>>;
+
+    /// Return the tree produced by merging only the changes attributable to
+    /// `commit_ids`.
+    ///
+    /// This helper is intentionally narrower than "merge the trees of these
+    /// commits". Each selected commit contributes only its own selected change
+    /// range, and not the full tree state inherited through unselected
+    /// parents.
+    ///
+    /// The merge proceeds as follows:
+    /// - Exact duplicate commit IDs are ignored.
+    /// - The selected commits are turned into a merge plan by following each
+    ///   selected commit's first-parent chain until it leaves the selected set.
+    /// - Selected commits that are the direct first parent of another selected
+    ///   commit are omitted from the plan, because their contribution is
+    ///   already part of the descendant's selected first-parent range.
+    /// - If that leaves a single planned commit, its tree is returned as-is.
+    /// - Otherwise, the merge starts from the shared merge-base of the planned
+    ///   commits.
+    /// - The helper then merges each planned commit's `base..commit` change
+    ///   range into the accumulated tree.
+    /// - If one of those merge steps has unresolved conflicts, folding stops
+    ///   immediately and later planned commits are not merged into the result.
+    ///
+    /// In practice, this means contiguous selected first-parent chains are
+    /// collapsed into one planned change range, while non-selected commits in
+    /// the middle of a selected history remain excluded from the result.
+    ///
+    /// Example:
+    /// - selected commits: `A`, `C`
+    /// - history: `M <- B <- C` and `M <- A`
+    ///
+    /// Then the result contains the changes from `A` and `C`, but not the
+    /// changes introduced by `B`. `C` is measured relative to `B`, not
+    /// relative to `M`.
+    ///
+    /// If an unresolved merge is encountered, the returned outcome keeps the
+    /// auto-resolved tree from that first conflicted step in
+    /// [`MergeCommitChangesOutcome::tree_id`] together with enough metadata in
+    /// [`MergeCommitChangesOutcome::conflict`] to materialize a GitButler
+    /// conflicted commit.
+    fn merge_commit_changes_to_tree(
+        &self,
+        commit_ids: Vec<gix::ObjectId>,
+        merge_options: gix::merge::tree::Options,
+    ) -> anyhow::Result<MergeCommitChangesOutcome>;
 
     /// Configure the repository for diff operations between trees.
     /// This means it needs an object cache relative to the amount of files in the repository.
@@ -250,6 +338,83 @@ impl RepositoryExt for gix::Repository {
             merge_options,
         )
         .context("failed to merge trees for cherry pick")
+    }
+
+    fn merge_commit_changes_to_tree(
+        &self,
+        commit_ids: Vec<gix::ObjectId>,
+        merge_options: gix::merge::tree::Options,
+    ) -> anyhow::Result<MergeCommitChangesOutcome> {
+        let merge_plan = plan_commit_changes_for_merge(self, commit_ids)?;
+        let Some(first_commit_change) = merge_plan.first().copied() else {
+            anyhow::bail!("Cannot merge an empty set of commits");
+        };
+        if merge_plan.len() == 1 {
+            let commit = crate::Commit::from_id(first_commit_change.commit_id.attach(self))?;
+            let tree_id = commit.tree_id_or_auto_resolution()?.detach();
+            let conflict = if commit.is_conflicted() {
+                let (base_tree_id, ours_tree_id, theirs_tree_id) = commit
+                    .conflicted_tree_ids()?
+                    .context("conflicted commit is missing conflicted tree sides")?;
+                Some(MergeCommitChangesConflict {
+                    base_tree_id: base_tree_id.detach(),
+                    ours_tree_id: ours_tree_id.detach(),
+                    theirs_tree_id: theirs_tree_id.detach(),
+                    conflict_entries: commit
+                        .conflict_entries()?
+                        .context("conflicted commit is missing conflict entries")?,
+                })
+            } else {
+                None
+            };
+            return Ok(MergeCommitChangesOutcome { tree_id, conflict });
+        }
+
+        let merge_base = self
+            .merge_base_octopus(merge_plan.iter().map(|change| change.commit_id))
+            .context("failed to compute merge-base for planned commit changes")?;
+        let mut ours = crate::Commit::from_id(merge_base)?
+            .tree_id_or_auto_resolution()?
+            .detach();
+        let mut conflict = None;
+        let conflict_kind = gix::merge::tree::TreatAsUnresolved::forced_resolution();
+
+        for change in merge_plan {
+            let theirs = crate::Commit::from_id(change.commit_id.attach(self))?
+                .tree_id_or_auto_resolution()?
+                .detach();
+            let mut merge = self
+                .merge_trees(
+                    change.base_tree_id,
+                    ours,
+                    theirs,
+                    self.default_merge_labels(),
+                    merge_options.clone(),
+                )
+                .context("failed to merge commit trees")?;
+            let merged_tree_id = merge.tree.write()?.detach();
+            if merge.has_unresolved_conflicts(conflict_kind) {
+                conflict = Some(MergeCommitChangesConflict {
+                    base_tree_id: change.base_tree_id,
+                    ours_tree_id: ours,
+                    theirs_tree_id: theirs,
+                    conflict_entries: extract_conflicted_files(
+                        self,
+                        merged_tree_id,
+                        merge,
+                        conflict_kind,
+                    )?,
+                });
+                ours = merged_tree_id;
+                break;
+            }
+            ours = merged_tree_id;
+        }
+
+        Ok(MergeCommitChangesOutcome {
+            tree_id: ours,
+            conflict,
+        })
     }
 
     fn for_tree_diffing(mut self) -> anyhow::Result<Self> {
@@ -487,4 +652,199 @@ fn commit_time(overriding_variable_name: &str) -> gix::date::Time {
         .ok()
         .and_then(|time| gix::date::parse(&time, Some(std::time::SystemTime::now())).ok())
         .unwrap_or_else(gix::date::Time::now_local_or_utc)
+}
+
+/// Turn selected commits into the change ranges that should actually be merged.
+///
+/// The planner preserves the first occurrence order of selected commits after
+/// exact duplicates are removed.
+///
+/// It loads each selected commit's first parent once, then derives which
+/// selected commits are tips of contiguous selected first-parent chains. Only
+/// those tips become planned merges, and each planned merge walks downward
+/// through its selected first-parent chain to find the first unselected base.
+///
+/// Non-contiguous selections are preserved. If `B` and `D` are selected in
+/// `M <- B <- C <- D`, then both remain in the plan: `B` contributes `M..B`,
+/// and `D` contributes `C..D`.
+fn plan_commit_changes_for_merge(
+    repo: &gix::Repository,
+    commit_ids: Vec<gix::ObjectId>,
+) -> anyhow::Result<Vec<PlannedCommitChange>> {
+    let selected_commit_ids = deduplicate_commit_ids(commit_ids);
+    let selected_commit_set = selected_commit_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut first_parent_cache =
+        std::collections::HashMap::<gix::ObjectId, Option<gix::ObjectId>>::new();
+    let direct_selected_parent_by_commit = selected_commit_ids
+        .iter()
+        .copied()
+        .map(|commit_id| {
+            let selected_parent_id = first_parent_of(repo, commit_id, &mut first_parent_cache)?
+                .filter(|parent_id| selected_commit_set.contains(parent_id));
+            Ok((commit_id, selected_parent_id))
+        })
+        .collect::<anyhow::Result<std::collections::HashMap<_, _>>>()?;
+
+    let mut selected_child_count =
+        std::collections::HashMap::<gix::ObjectId, usize>::with_capacity(selected_commit_ids.len());
+    for commit_id in selected_commit_ids.iter().copied() {
+        selected_child_count.insert(commit_id, 0);
+    }
+    for selected_parent_id in direct_selected_parent_by_commit.values().flatten() {
+        if let Some(child_count) = selected_child_count.get_mut(selected_parent_id) {
+            *child_count += 1;
+        }
+    }
+
+    let mut consumed_commit_ids =
+        std::collections::HashSet::with_capacity(selected_commit_ids.len());
+    let mut planned_commit_changes = Vec::new();
+
+    for commit_id in selected_commit_ids {
+        let is_direct_parent_of_selected_commit = selected_child_count
+            .get(&commit_id)
+            .copied()
+            .unwrap_or_default()
+            > 0;
+        if is_direct_parent_of_selected_commit || !consumed_commit_ids.insert(commit_id) {
+            continue;
+        }
+
+        let mut current_commit_id = commit_id;
+        while let Some(selected_parent_id) = direct_selected_parent_by_commit
+            .get(&current_commit_id)
+            .copied()
+            .flatten()
+        {
+            consumed_commit_ids.insert(selected_parent_id);
+            current_commit_id = selected_parent_id;
+        }
+
+        let base_tree_id = match first_parent_of(repo, current_commit_id, &mut first_parent_cache)?
+        {
+            Some(parent_id) => crate::Commit::from_id(parent_id.attach(repo))?
+                .tree_id_or_auto_resolution()?
+                .detach(),
+            None => gix::ObjectId::empty_tree(repo.object_hash()),
+        };
+
+        planned_commit_changes.push(PlannedCommitChange {
+            commit_id,
+            base_tree_id,
+        });
+    }
+
+    Ok(planned_commit_changes)
+}
+
+/// Return the first parent of `commit_id`, caching commit lookups across calls.
+///
+/// The cache stores `None` for root commits so repeated calls don't reload the
+/// same commit object from the repository. This helper only follows the first
+/// parent edge and intentionally ignores additional parents.
+fn first_parent_of(
+    repo: &gix::Repository,
+    commit_id: gix::ObjectId,
+    first_parent_cache: &mut std::collections::HashMap<gix::ObjectId, Option<gix::ObjectId>>,
+) -> anyhow::Result<Option<gix::ObjectId>> {
+    if let Some(parent_id) = first_parent_cache.get(&commit_id).copied() {
+        return Ok(parent_id);
+    }
+
+    let parent_id = crate::Commit::from_id(commit_id.attach(repo))
+        .with_context(|| format!("failed to load selected commit {commit_id}"))?
+        .inner
+        .parents
+        .first()
+        .copied();
+    first_parent_cache.insert(commit_id, parent_id);
+    Ok(parent_id)
+}
+
+fn deduplicate_commit_ids(commit_ids: Vec<gix::ObjectId>) -> Vec<gix::ObjectId> {
+    let mut seen = std::collections::HashSet::with_capacity(commit_ids.len());
+    let mut deduplicated = Vec::with_capacity(commit_ids.len());
+    for commit_id in commit_ids {
+        if seen.insert(commit_id) {
+            deduplicated.push(commit_id);
+        }
+    }
+    deduplicated
+}
+
+fn extract_conflicted_files(
+    repo: &gix::Repository,
+    merged_tree_id: gix::ObjectId,
+    merge_result: gix::merge::tree::Outcome<'_>,
+    treat_as_unresolved: gix::merge::tree::TreatAsUnresolved,
+) -> anyhow::Result<crate::commit::ConflictEntries> {
+    use gix::index::entry::Stage;
+
+    let mut index = repo.index_from_tree(&merged_tree_id.attach(repo))?;
+    merge_result.index_changed_after_applying_conflicts(
+        &mut index,
+        treat_as_unresolved,
+        gix::merge::tree::apply_index_entries::RemovalMode::Mark,
+    );
+
+    let (mut ancestor_entries, mut our_entries, mut their_entries) =
+        (Vec::new(), Vec::new(), Vec::new());
+    for entry in index.entries() {
+        let stage = entry.stage();
+        let storage = match stage {
+            Stage::Unconflicted => {
+                continue;
+            }
+            Stage::Base => &mut ancestor_entries,
+            Stage::Ours => &mut our_entries,
+            Stage::Theirs => &mut their_entries,
+        };
+        let path = entry.path(&index);
+        storage.push(gix::path::from_bstr(path).into_owned());
+    }
+
+    let mut entries = crate::commit::ConflictEntries {
+        ancestor_entries,
+        our_entries,
+        their_entries,
+    };
+    if !entries.has_entries() {
+        fn push_unique(
+            storage: &mut Vec<std::path::PathBuf>,
+            change: &gix::diff::tree_with_rewrites::Change,
+        ) {
+            let path = gix::path::from_bstr(change.location()).into_owned();
+            if !storage.contains(&path) {
+                storage.push(path);
+            }
+        }
+        for conflict in merge_result
+            .conflicts
+            .iter()
+            .filter(|conflict| conflict.is_unresolved(treat_as_unresolved))
+        {
+            let (ours, theirs) = conflict.changes_in_resolution();
+            push_unique(&mut entries.our_entries, ours);
+            push_unique(&mut entries.their_entries, theirs);
+        }
+    }
+    anyhow::ensure!(
+        entries.has_entries() == merge_result.has_unresolved_conflicts(treat_as_unresolved),
+        "merge conflict entries did not match unresolved conflict state: {:#?}",
+        merge_result.conflicts
+    );
+    Ok(entries)
+}
+
+/// This is exported for testing purposes only
+#[doc(hidden)]
+#[allow(dead_code)]
+pub fn plan_commit_changes_for_merge_for_tests(
+    repo: &gix::Repository,
+    commit_ids: Vec<gix::ObjectId>,
+) -> anyhow::Result<Vec<PlannedCommitChange>> {
+    plan_commit_changes_for_merge(repo, commit_ids)
 }

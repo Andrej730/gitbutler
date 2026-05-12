@@ -115,7 +115,10 @@ mod ext;
 pub use ext::ObjectStorageExt;
 
 mod repo_ext;
-pub use repo_ext::{RepositoryExt, update_head_reference};
+pub use repo_ext::{
+    PlannedCommitChange, RepositoryExt, plan_commit_changes_for_merge_for_tests,
+    update_head_reference,
+};
 
 /// The legacy single-workspace reference used by GitButler.
 pub const WORKSPACE_REF_NAME: &str = "refs/heads/gitbutler/workspace";

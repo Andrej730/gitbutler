@@ -398,10 +398,10 @@ impl RepositoryExt for gix::Repository {
                     base_tree_id: change.base_tree_id,
                     ours_tree_id: ours,
                     theirs_tree_id: theirs,
-                    conflict_entries: extract_conflicted_files(
+                    conflict_entries: crate::commit::conflict_entries_from_merge_outcome(
                         self,
                         merged_tree_id,
-                        merge,
+                        &merge,
                         conflict_kind,
                     )?,
                 });
@@ -773,70 +773,6 @@ fn deduplicate_commit_ids(commit_ids: Vec<gix::ObjectId>) -> Vec<gix::ObjectId> 
         }
     }
     deduplicated
-}
-
-fn extract_conflicted_files(
-    repo: &gix::Repository,
-    merged_tree_id: gix::ObjectId,
-    merge_result: gix::merge::tree::Outcome<'_>,
-    treat_as_unresolved: gix::merge::tree::TreatAsUnresolved,
-) -> anyhow::Result<crate::commit::ConflictEntries> {
-    use gix::index::entry::Stage;
-
-    let mut index = repo.index_from_tree(&merged_tree_id.attach(repo))?;
-    merge_result.index_changed_after_applying_conflicts(
-        &mut index,
-        treat_as_unresolved,
-        gix::merge::tree::apply_index_entries::RemovalMode::Mark,
-    );
-
-    let (mut ancestor_entries, mut our_entries, mut their_entries) =
-        (Vec::new(), Vec::new(), Vec::new());
-    for entry in index.entries() {
-        let stage = entry.stage();
-        let storage = match stage {
-            Stage::Unconflicted => {
-                continue;
-            }
-            Stage::Base => &mut ancestor_entries,
-            Stage::Ours => &mut our_entries,
-            Stage::Theirs => &mut their_entries,
-        };
-        let path = entry.path(&index);
-        storage.push(gix::path::from_bstr(path).into_owned());
-    }
-
-    let mut entries = crate::commit::ConflictEntries {
-        ancestor_entries,
-        our_entries,
-        their_entries,
-    };
-    if !entries.has_entries() {
-        fn push_unique(
-            storage: &mut Vec<std::path::PathBuf>,
-            change: &gix::diff::tree_with_rewrites::Change,
-        ) {
-            let path = gix::path::from_bstr(change.location()).into_owned();
-            if !storage.contains(&path) {
-                storage.push(path);
-            }
-        }
-        for conflict in merge_result
-            .conflicts
-            .iter()
-            .filter(|conflict| conflict.is_unresolved(treat_as_unresolved))
-        {
-            let (ours, theirs) = conflict.changes_in_resolution();
-            push_unique(&mut entries.our_entries, ours);
-            push_unique(&mut entries.their_entries, theirs);
-        }
-    }
-    anyhow::ensure!(
-        entries.has_entries() == merge_result.has_unresolved_conflicts(treat_as_unresolved),
-        "merge conflict entries did not match unresolved conflict state: {:#?}",
-        merge_result.conflicts
-    );
-    Ok(entries)
 }
 
 /// This is exported for testing purposes only

@@ -11,7 +11,7 @@ use but_core::{
 };
 use but_rebase::commit::DateMode;
 use but_rebase::graph_rebase::{
-    Editor, GraphEditorOptions, LookupStep, Selector, Step, SuccessfulRebase, ToSelector,
+    Editor, ExtraRef, GraphEditorOptions, LookupStep, Selector, Step, SuccessfulRebase, ToSelector,
     mutate::{SegmentDelimiter, SelectorSet},
 };
 use gix::{prelude::ObjectIdExt as _, remote::Direction};
@@ -99,7 +99,7 @@ impl fmt::Display for InteractiveIntegration {
 pub fn integrate_branch_with_steps<'ws, 'meta, M: RefMetadata>(
     ref_name: &gix::refs::FullNameRef,
     integration: InteractiveIntegration,
-    workspace: &'ws mut but_graph::projection::Workspace,
+    workspace: &'ws mut but_graph::Workspace,
     meta: &'meta mut M,
     repo: &gix::Repository,
 ) -> Result<SuccessfulRebase<'ws, 'meta, M>> {
@@ -110,7 +110,7 @@ pub fn integrate_branch_with_steps<'ws, 'meta, M: RefMetadata>(
 
     let upstream_ref_name = upstream_ref_name.as_ref();
     let editor_options = GraphEditorOptions {
-        extra_refs: vec![upstream_ref_name],
+        extra_refs: vec![ExtraRef::immutable(upstream_ref_name)],
         ..GraphEditorOptions::default()
     };
     let mut editor = Editor::create_with_opts(workspace, meta, repo, &editor_options)?;
@@ -285,31 +285,28 @@ fn integration_steps_to_segment_steps_for_editor<M: RefMetadata>(
                 out.push(existing_or_new_pick_step(editor, *commit_id)?);
             }
             InteractiveIntegrationStep::PickUpstream { commit_id } => {
-                let upstream_commit = {
-                    let mut upstream_commit = editor.empty_commit()?;
-                    let commit = editor.find_commit(*commit_id)?;
-                    upstream_commit.inner = commit.inner;
-                    upstream_commit
-                };
-                let upstream_commit = editor
-                    .new_commit_untracked(upstream_commit, DateMode::CommitterUpdateAuthorKeep)?;
-                out.push(Step::new_untracked_pick(upstream_commit));
+                out.push(existing_or_new_pick_step(editor, *commit_id)?);
             }
             InteractiveIntegrationStep::Squash { commits, message } => {
                 out.push(squash_step_for_editor(editor, commits, message.as_deref())?);
             }
             InteractiveIntegrationStep::Merge { commit_id } => {
                 let mut merge_commit = editor.empty_commit()?;
-                merge_commit.message = "MEERGE".into();
+                merge_commit.message = format!("Merge {commit_id} into previous commit").into();
                 let merge_commit =
                     editor.new_commit_untracked(merge_commit, DateMode::CommitterKeepAuthorKeep)?;
-
-                let commit_to_merge = if let Some(existing) = editor.try_select_commit(*commit_id) {
-                    editor.lookup_step(existing)?
-                } else {
-                    Step::new_pick(*commit_id)
+                let preserved_parents = editor
+                    .find_commit(*commit_id)?
+                    .inner
+                    .parents
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>();
+                let mut commit_to_merge = Step::new_untracked_pick(*commit_id);
+                let Step::Pick(pick) = &mut commit_to_merge else {
+                    bail!("BUG: expected merge side parent to be a pick step");
                 };
-
+                pick.preserved_parents = Some(preserved_parents);
                 let commit_to_merge = editor.add_step(commit_to_merge)?;
                 let merge_commit = editor.add_step(Step::new_untracked_pick(merge_commit))?;
                 editor.add_edge(merge_commit, commit_to_merge, 1)?;

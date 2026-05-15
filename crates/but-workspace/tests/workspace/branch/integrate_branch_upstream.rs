@@ -354,11 +354,14 @@ fn integrate_upstream_commits_into_local() -> Result<()> {
     rebase.materialize()?;
 
     insta::assert_snapshot!(visualize_commit_graph_all(&repo)?, @"
-    * 455d393 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * 298d472 (A) local change in A 2
-    * 422a07d local change in A 1
-    * 6a17628 (origin/A) remote change in A 2
-    * 715d7b0 remote change in A 1
+    * 4cb84fe (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    * 2e4526d (A) local change in A 2
+    * 183a3eb local change in A 1
+    * 2e62c7c remote change in A 2
+    * 619f400 remote change in A 1
+    | * 6a17628 (origin/A) remote change in A 2
+    | * 715d7b0 remote change in A 1
+    |/  
     * 621b98a shared local/remote
     * cfbcc20 (origin/main, main) init-integration
     ");
@@ -675,9 +678,9 @@ fn integrate_upstream_commits_into_local_with_remote_on_top() -> Result<()> {
     rebase.materialize()?;
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
-    * fb437fd (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * 85ce57b (A) remote change in A 2
-    * 01b7a91 remote change in A 1
+    * c23e916 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    * 9695e1a (A) remote change in A 2
+    * c566b5c remote change in A 1
     * 8347946 local change in A 2
     * 86838ae local change in A 1
     | * 6a17628 (origin/A) remote change in A 2
@@ -745,13 +748,14 @@ fn integrate_upstream_commits_into_local_with_remote_interlaced() -> Result<()> 
     rebase.materialize()?;
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
-    * 0ce7098 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * ad12639 (A) local change in A 2
-    * a6a4994 remote change in A 2
-    * 593d2d6 local change in A 1
+    * aec3388 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    * f24fcf1 (A) local change in A 2
+    * 9d51127 remote change in A 2
+    * 6d3db00 local change in A 1
+    * 619f400 remote change in A 1
     | * 6a17628 (origin/A) remote change in A 2
+    | * 715d7b0 remote change in A 1
     |/
-    * 715d7b0 remote change in A 1
     * 621b98a shared local/remote
     * cfbcc20 (origin/main, main) init-integration
     ");
@@ -814,8 +818,8 @@ fn integrate_upstream_commits_into_local_with_remote_one_local_one_remote() -> R
     rebase.materialize()?;
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
-    * ab8c010 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * 801c92f (A) remote change in A 2
+    * ff38382 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    * 23c7c53 (A) remote change in A 2
     * 86838ae local change in A 1
     | * 6a17628 (origin/A) remote change in A 2
     | * 715d7b0 remote change in A 1
@@ -886,8 +890,8 @@ fn integrate_upstream_commits_into_local_with_remote_one_local_one_remote_and_ex
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
     * 8347946 (A-shadow) local change in A 2
-    | * ab8c010 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    | * 801c92f (A) remote change in A 2
+    | * ff38382 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    | * 23c7c53 (A) remote change in A 2
     |/
     * 86838ae local change in A 1
     | * 6a17628 (origin/A) remote change in A 2
@@ -955,9 +959,12 @@ fn integrate_upstream_commits_into_local_with_only_remote_commits() -> Result<()
     rebase.materialize()?;
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
-    * b3d4566 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * 6a17628 (origin/A, A) remote change in A 2
-    * 715d7b0 remote change in A 1
+    * 46ac8ff (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    * 2e62c7c (A) remote change in A 2
+    * 619f400 remote change in A 1
+    | * 6a17628 (origin/A) remote change in A 2
+    | * 715d7b0 remote change in A 1
+    |/
     * 621b98a shared local/remote
     * cfbcc20 (origin/main, main) init-integration
     ");
@@ -1007,10 +1014,13 @@ fn integrate_upstream_commits_into_local_with_squashed_local_commits() -> Result
     rebase.materialize()?;
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
-    * 5ef31c2 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * c297225 (A) squashed local commits
-    * 6a17628 (origin/A) remote change in A 2
-    * 715d7b0 remote change in A 1
+    * df384af (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    * d9585c8 (A) squashed local commits
+    * 2e62c7c remote change in A 2
+    * 619f400 remote change in A 1
+    | * 6a17628 (origin/A) remote change in A 2
+    | * 715d7b0 remote change in A 1
+    |/
     * 621b98a shared local/remote
     * cfbcc20 (origin/main, main) init-integration
     ");
@@ -1174,8 +1184,8 @@ fn integrate_upstream_commits_into_local_with_squashed_remote_into_local_conflic
 
     insta::assert_snapshot!(normalized_graph_snapshot(&repo)?, @"
     * f03fc2c (origin/A, new-origin) remote change in A 1
-    | * 5b134d5 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    | * 13b9b63 (A) [conflict] squashed conflicting commits
+    | * 1b052b4 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    | * 20ebfcc (A) [conflict] squashed conflicting commits
     |/
     * 2b73dee (origin/main, main) init-integration
     ");
@@ -1196,17 +1206,17 @@ fn integrate_upstream_commits_into_local_with_squashed_remote_into_local_conflic
        listed above, resolve the conflicts, and amend the commit.
     "#);
     insta::assert_snapshot!(visualize_tree(branch_tip.tree_id()?), @r#"
-    accf9f2
-    ├── .auto-resolution:cd74779
-    │   └── shared.txt:100644:9c998f7 "remote\n"
-    ├── .conflict-base-0:48e531d
+    450d676
+    ├── .auto-resolution:276d2b4 
+    │   └── shared.txt:100644:4083037 "local\n"
+    ├── .conflict-base-0:48e531d 
     │   └── shared.txt:100644:df967b9 "base\n"
     ├── .conflict-files:100644:d0a3da4 "ancestorEntries = [\"shared.txt\"]\nourEntries = [\"shared.txt\"]\ntheirEntries = [\"shared.txt\"]\n"
-    ├── .conflict-side-0:cd74779
-    │   └── shared.txt:100644:9c998f7 "remote\n"
-    ├── .conflict-side-1:276d2b4
+    ├── .conflict-side-0:276d2b4 
     │   └── shared.txt:100644:4083037 "local\n"
-    └── shared.txt:100644:9c998f7 "remote\n"
+    ├── .conflict-side-1:cd74779 
+    │   └── shared.txt:100644:9c998f7 "remote\n"
+    └── shared.txt:100644:4083037 "local\n"
     "#);
 
     Ok(())

@@ -9,11 +9,11 @@ use but_core::{
     MergeCommitChangesOutcome, RefMetadata, RepositoryExt,
     commit::{add_conflict_markers, write_conflicted_tree},
 };
+use but_rebase::commit::DateMode;
 use but_rebase::graph_rebase::{
     Editor, GraphEditorOptions, LookupStep, Selector, Step, SuccessfulRebase, ToSelector,
     mutate::{SegmentDelimiter, SelectorSet},
 };
-use but_rebase::{commit::DateMode, graph_rebase::testing::Testing};
 use gix::{prelude::ObjectIdExt as _, remote::Direction};
 
 use crate::branch::segment_disconnect::determine_parent_selector;
@@ -202,8 +202,6 @@ fn integration_steps_into_segment_nodes<M: RefMetadata>(
         connect_parent_step(editor, parent_most, merge_base_step)?
     };
 
-    println!("{}", editor.steps_ascii());
-
     Ok(SegmentDelimiter {
         child: child_most,
         parent: parent_most,
@@ -287,7 +285,15 @@ fn integration_steps_to_segment_steps_for_editor<M: RefMetadata>(
                 out.push(existing_or_new_pick_step(editor, *commit_id)?);
             }
             InteractiveIntegrationStep::PickUpstream { commit_id } => {
-                out.push(Step::new_pick(*commit_id));
+                let upstream_commit = {
+                    let mut upstream_commit = editor.empty_commit()?;
+                    let commit = editor.find_commit(*commit_id)?;
+                    upstream_commit.inner = commit.inner;
+                    upstream_commit
+                };
+                let upstream_commit = editor
+                    .new_commit_untracked(upstream_commit, DateMode::CommitterUpdateAuthorKeep)?;
+                out.push(Step::new_untracked_pick(upstream_commit));
             }
             InteractiveIntegrationStep::Squash { commits, message } => {
                 out.push(squash_step_for_editor(editor, commits, message.as_deref())?);

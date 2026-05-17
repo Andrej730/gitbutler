@@ -10,9 +10,6 @@ import ClipboardService, { CLIPBOARD_SERVICE } from "$lib/backend/clipboard";
 import URLService, { URL_SERVICE } from "$lib/backend/url";
 import BaseBranchService, { BASE_BRANCH_SERVICE } from "$lib/baseBranch/baseBranchService.svelte";
 import { BranchService, BRANCH_SERVICE } from "$lib/branches/branchService.svelte";
-import { ATTACHMENT_SERVICE, AttachmentService } from "$lib/codegen/attachmentService.svelte";
-import { CLAUDE_CODE_SERVICE, ClaudeCodeService } from "$lib/codegen/claude";
-import { CodegenAnalytics, CODEGEN_ANALYTICS } from "$lib/codegen/codegenAnalytics";
 import CLIManager, { CLI_MANAGER } from "$lib/config/cli";
 import { GIT_CONFIG_SERVICE, GitConfigService } from "$lib/config/gitConfigService";
 import DependencyService, { DEPENDENCY_SERVICE } from "$lib/dependencies/dependencyService.svelte";
@@ -156,7 +153,6 @@ export function initDependencies(args: {
 
 	const aiPromptService = new AIPromptService();
 	const aiService = new AIService(gitConfig, secretsService, httpClient, tokenMemoryService);
-	const claudeCodeService = new ClaudeCodeService(backend, clientState.backendApi);
 	const userService = new UserService(
 		clientState.backendApi,
 		backend,
@@ -166,14 +162,7 @@ export function initDependencies(args: {
 		uiState,
 	);
 	const ircApiService = new IrcApiService(clientState.backendApi);
-	const attachmentService = new AttachmentService(clientState);
-
-	const ircSessionBridge = new IrcSessionBridge(
-		backend,
-		ircApiService,
-		claudeCodeService,
-		settingsService,
-	);
+	const ircSessionBridge = new IrcSessionBridge(backend, ircApiService, settingsService);
 
 	const workingFilesBroadcast = new WorkingFilesBroadcast(backend);
 
@@ -239,8 +228,6 @@ export function initDependencies(args: {
 		fModeManager,
 		projectsService,
 	);
-	const codegenAnalytics = new CodegenAnalytics(claudeCodeService, settingsService);
-
 	// ============================================================================
 	// SELECTION & EDITING
 	// ============================================================================
@@ -331,13 +318,11 @@ export function initDependencies(args: {
 		[BASE_BRANCH_SERVICE, baseBranchService],
 		[BRANCH_SERVICE, branchService],
 		[CHERRY_APPLY_SERVICE, cherryApplyService],
-		[CLAUDE_CODE_SERVICE, claudeCodeService],
 		[CLIENT_STATE, clientState],
 		[CLIPBOARD_SERVICE, clipboardService],
 		[CLI_MANAGER, cliManager],
 		[CLOUD_USER_SERVICE, cloudUserService],
 		[COMMIT_ANALYTICS, commitAnalytics],
-		[CODEGEN_ANALYTICS, codegenAnalytics],
 		[DATA_SHARING_SERVICE, dataSharingService],
 		[DEFAULT_FORGE_FACTORY, forgeFactory],
 		[DEPENDENCY_SERVICE, dependencyService],
@@ -366,7 +351,6 @@ export function initDependencies(args: {
 		[POSTHOG_WRAPPER, posthog],
 		[PROJECTS_SERVICE, projectsService],
 		[PROMPT_SERVICE, promptService],
-		[ATTACHMENT_SERVICE, attachmentService],
 		[REMOTES_SERVICE, remotesService],
 		[RESIZE_SYNC, resizeSync],
 		[RULES_SERVICE, rulesService],

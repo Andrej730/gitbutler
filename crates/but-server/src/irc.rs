@@ -4,8 +4,8 @@
 //! (e.g. broadcast handlers, `send_message`) contain additional logic such as
 //! emitting frontend events or seeding initial state.
 
+use crate::broadcaster::FrontendEvent;
 use axum::{Json, extract::State};
-use but_claude::broadcaster::FrontendEvent;
 use but_irc::commands::{self, *};
 use serde::Deserialize;
 use serde_json::json;

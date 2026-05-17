@@ -5,11 +5,9 @@
 	import Resizer from "$components/shared/Resizer.svelte";
 	import StackDetails from "$components/views/StackDetails.svelte";
 	import StackPanel from "$components/views/StackPanel.svelte";
-	import { CLAUDE_CODE_SERVICE } from "$lib/codegen/claude";
 	import { IRC_API_SERVICE } from "$lib/irc/ircApiService";
 	import { sessionChannel } from "$lib/irc/protocol";
 	import { IRC_SESSION_BRIDGE } from "$lib/irc/sessionBridge.svelte";
-	import { RULES_SERVICE } from "$lib/rules/rulesService.svelte";
 	import { SETTINGS_SERVICE } from "$lib/settings/appSettings";
 	import { StackController, setStackContext } from "$lib/stacks/stackController.svelte";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
@@ -51,20 +49,11 @@
 	setStackContext(controller);
 
 	const stackService = inject(STACK_SERVICE);
-	const claudeCodeService = inject(CLAUDE_CODE_SERVICE);
-	const rulesService = inject(RULES_SERVICE);
 	const settingsService = inject(SETTINGS_SERVICE);
 	const ircApiService = inject(IRC_API_SERVICE);
 	const ircSessionBridge = inject(IRC_SESSION_BRIDGE);
 
 	const branchesQuery = $derived(stackService.branches(controller.projectId, controller.stackId));
-	const hasRulesToClear = $derived(
-		rulesService.hasRulesToClear(controller.projectId, controller.stackId),
-	);
-	const claudeConfigQuery = $derived(
-		claudeCodeService.claudeConfig({ projectId: controller.projectId }),
-	);
-
 	const PANEL1_RESIZER = {
 		minWidth: 20,
 		maxWidth: 64,
@@ -122,17 +111,9 @@
 		ircNick && topBranchName ? sessionChannel(ircNick, topBranchName) : undefined,
 	);
 
-	const sessionIdQuery = $derived(
-		rulesService.aiSessionId(controller.projectId, controller.stackId),
-	);
-	const sessionId = $derived(sessionIdQuery.response);
 	const isManuallyBridged = $derived(ircSessionBridge.isManuallyBridged(stackId));
 	const readyToBridge = $derived(
-		sessionId &&
-			stackId &&
-			topBranchName &&
-			ircEnabled &&
-			(ircSettings?.autoShare || isManuallyBridged.current),
+		stackId && topBranchName && ircEnabled && (ircSettings?.autoShare || isManuallyBridged.current),
 	);
 
 	const connectionStateQuery = $derived(ircEnabled ? ircApiService.connectionState() : undefined);
@@ -193,16 +174,13 @@
 		},
 	}}
 >
-	<ReduxResult
-		projectId={controller.projectId}
-		result={combineResults(branchesQuery.result, hasRulesToClear.result, claudeConfigQuery.result)}
-	>
+	<ReduxResult projectId={controller.projectId} result={combineResults(branchesQuery.result)}>
 		{#snippet loading()}
 			<div style:width="{$persistedStackWidth}rem" class="lane-skeleton">
 				<FullviewLoading />
 			</div>
 		{/snippet}
-		{#snippet children([branches, hasRulesToClear, claudeConfig])}
+		{#snippet children([branches])}
 			<AppScrollableContainer childrenWrapHeight="100%" enableDragScroll>
 				<div
 					class="stack-view"
@@ -238,12 +216,7 @@
 
 			<!-- DETAILS PANEL -->
 			{#if isDetailsOpen}
-				<StackDetails
-					{hasRulesToClear}
-					{claudeConfig}
-					{ircChannel}
-					onWidthChange={updateDetailsViewWidth}
-				/>
+				<StackDetails {ircChannel} onWidthChange={updateDetailsViewWidth} />
 			{/if}
 		{/snippet}
 	</ReduxResult>
